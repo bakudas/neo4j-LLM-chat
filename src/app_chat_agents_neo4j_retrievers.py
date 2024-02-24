@@ -9,38 +9,17 @@ from langchain.agents import AgentExecutor, create_react_agent
 from langchain.tools import Tool
 from langchain import hub
 from langchain_community.tools import YouTubeSearchTool
-from langchain_community.tools import WikipediaQueryRun
-from langchain_community.utilities import WikipediaAPIWrapper
 from langchain_community.graphs import Neo4jGraph
 from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 
 # load values from .env
 config = dotenv_values(".env")
 
-# # graph db setup
-# graph = Neo4jGraph(
-#         url=config["NEO4J_URI"],
-#         username=config["NEO4J_USERNAME"],
-#         password=config["NEO4J_PASSWORD"],
-# )
-
-# # print graph schema 
-# print(graph.schema)
-
-# result = graph.query("""
-# MATCH (m:Movie{title: 'Toy Story'}) 
-# RETURN m.title, m.plot, m.poster
-# """)
-
-# # print the cypher query result
-# print(result)
-
 # setup LLM 
 chat_llm = ChatOpenAI(openai_api_key=config["OPENAI_API_KEY"])
 
 # setup embedding provider
 embedding_provider = OpenAIEmbeddings(openai_api_key=config["OPENAI_API_KEY"])
-
 
 movie_plot_vector = Neo4jVector.from_existing_index(
         embedding_provider,
@@ -59,21 +38,15 @@ plot_retriever = RetrievalQA.from_llm(
     return_source_documents=True
 )
 
-result = plot_retriever.invoke(
-    {"query": "você poderia me sugerir um filme sobre guerra intergalática?"}
-)
-
-print(result)
+def run_retriever(query):
+    results = plot_retriever.invoke({"query":query})
+    # format the results
+    movies = '\n'.join([doc.metadata["title"] + " - " + doc.page_content for doc in results["source_documents"]])
+    return movies       
 
 # create a prompt template 
 prompt = PromptTemplate(template="""
-        Suas áreas de interesse são: Design, Research, Science, Data Science, Tecnology, Computação de Alto Desempenho.
-        Você é um cientista de dados renomado, com diversos títulos.
-        Muitas publicações na área de data science e IA.
-        Seu trabalho é ajudar profissionais iniciantes na área.
-        Responda usando palavras e linguagem simples, se possível use metáforas 
-        e analogias para explicar os conceitos mais complexos.
-        Você sempre responderá em pt-br.
+        You are a movie expert. You find movies from a genre or plot.
 
         Histórico do Chat: {chat_history}
         Pergunta: {input}
@@ -88,28 +61,27 @@ chat_chain = LLMChain(llm=chat_llm, prompt=prompt, memory=memory, verbose=True)
 
 # initialising specific tools
 youtube = YouTubeSearchTool()
-wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
 
 # manage tools the model will able to use
 tools = [
-        Tool.from_function(
-                name="Chat Normal sobre Data Science, Desing, Programação e IA",
-                description="Use sempre para conversas sobre a área de data science e IA, design, programação e conhecimentos gerais. A pergunta será uma string. Retorne uma string.",
-                func=chat_chain.run,
-                return_direct=True,
-        ),
-        Tool.from_function(
-                name="Buscador de Tutorial e Vídeos instrutivos",
-                description="Use apenas quando for preciso buscar um tutorial ou vídeo. A pergunta precisa incluir a palavra 'tutorial' e/ou 'curso' e/ou 'video'. Retorne com uma breve explicação e um link para para um vídeo no Youtube.",
-                func=youtube.run,
-                return_direct=True,
-        ),
-        Tool.from_function(
-                name="Buscador de artigos na Wikepedia.",
-                description="Use apenas quando for estritamente necessário buscar uma referência na wikipedia. A pergunta precisa incluir a palavra 'wikipedia'. Retorne com as informações da Wikepedia.",
-                func=wikipedia.run,
-                return_direct=True,
-        )
+    Tool.from_function(
+        name="Movie Chat",
+        description="For when you need to chat about movies. The question will be a string. Return a string.",
+        func=chat_chain.run,
+        return_direct=True
+    ),
+    Tool.from_function(
+        name="Movie Trailer Search",
+        description="Use when needing to find a movie trailer. The question will include the word 'trailer'. Return a link to a YouTube video.",
+        func=youtube.run,
+        return_direct=True
+    ),
+    Tool.from_function(
+        name="Movie Plot Search",
+        description="For when you need to compare a plot to a movie. The question will be a string. Return a string.",
+        func=run_retriever,
+        return_direct=True
+    )
 ]
 
 # create and initialise agents
